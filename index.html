@@ -1,131 +1,128 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>WebRTC Video Call</title>
+  <meta charset="UTF-8">
+  <title>WebRTC Demo</title>
   <style>
     video {
       width: 45%;
       margin: 5px;
       background: black;
     }
-    input, button {
-      margin: 5px;
-      padding: 10px;
-    }
+    input, button { margin: 5px; padding: 5px; }
   </style>
 </head>
 <body>
-  <h2>WebRTC Video Call</h2>
+  <h2>WebRTC Demo</h2>
   <video id="localVideo" autoplay muted playsinline></video>
   <video id="remoteVideo" autoplay playsinline></video>
   <br>
   <button id="createCall">Create Call</button>
+  <input type="text" id="callIdInput" placeholder="Enter 3-letter Call ID">
   <button id="joinCall">Join Call</button>
-  <input type="text" id="callIdInput" maxlength="3" placeholder="Enter 3-letter Call ID">
   <p id="callIdDisplay"></p>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-    import { getDatabase, ref, set, onValue, push } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+    import { getDatabase, ref, set, get, onChildAdded, child } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 
+    // ----- Firebase config -----
     const firebaseConfig = {
-      databaseURL: "https://rtc-project-sih-default-rtdb.firebaseio.com/"
+      apiKey: "AIzaSyDGJvWk6h7JFtuqdsM4RNGJwiQj_ZUz9R8",
+      authDomain: "rtc-project-sih.firebaseapp.com",
+      databaseURL: "https://rtc-project-sih-default-rtdb.firebaseio.com/",
+      projectId: "rtc-project-sih",
+      storageBucket: "rtc-project-sih.appspot.com",
+      messagingSenderId: "21024104436",
+      appId: "1:21024104436:web:23cf8fe41b750d118ba3a1"
     };
 
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
 
-    const localVideo = document.getElementById('localVideo');
-    const remoteVideo = document.getElementById('remoteVideo');
-    const createBtn = document.getElementById('createCall');
-    const joinBtn = document.getElementById('joinCall');
-    const callIdInput = document.getElementById('callIdInput');
-    const callIdDisplay = document.getElementById('callIdDisplay');
+    const localVideo = document.getElementById("localVideo");
+    const remoteVideo = document.getElementById("remoteVideo");
+    const createBtn = document.getElementById("createCall");
+    const joinBtn = document.getElementById("joinCall");
+    const callIdInput = document.getElementById("callIdInput");
+    const callIdDisplay = document.getElementById("callIdDisplay");
 
-    let localStream;
     let pc;
+    let localStream;
 
     const servers = {
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "turn:turn.anyfirewall.com:443?transport=tcp", username: "webrtc", credential: "webrtc" }
       ]
     };
 
-    async function initLocalStream() {
+    async function initMedia() {
       localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       localVideo.srcObject = localStream;
+    }
+
+    function generateCallId() {
+      const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+      let id = "";
+      for (let i = 0; i < 3; i++) id += letters.charAt(Math.floor(Math.random() * letters.length));
+      return id;
     }
 
     async function createPeerConnection(callId, isCaller) {
       pc = new RTCPeerConnection(servers);
 
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
       const remoteStream = new MediaStream();
       remoteVideo.srcObject = remoteStream;
+
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
       pc.ontrack = event => event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
 
-      const callRef = ref(db, 'calls/' + callId);
+      const callRef = ref(db, "calls/" + callId);
 
       pc.onicecandidate = event => {
-        if (event.candidate) push(ref(callRef, 'candidates'), event.candidate.toJSON());
+        if (event.candidate) set(ref(db, `calls/${callId}/candidates/${Math.random().toString(36).substring(2,9)}`), event.candidate.toJSON());
       };
 
-      onValue(callRef, async snapshot => {
+      onChildAdded(ref(db, `calls/${callId}/signals`), async snapshot => {
         const data = snapshot.val();
         if (!data) return;
 
-        if (isCaller && data.answer && !pc.currentRemoteDescription) {
-          await pc.setRemoteDescription(data.answer);
-        }
-
-        if (!isCaller && data.offer && !pc.currentRemoteDescription) {
-          await pc.setRemoteDescription(data.offer);
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          await set(ref(callRef, 'answer'), pc.localDescription.toJSON());
+        if (data.sdp && !pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(data.sdp);
+          if (data.sdp.type === "offer") {
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await set(ref(db, `calls/${callId}/signals`), { sdp: pc.localDescription.toJSON() });
+          }
         }
       });
 
-      onValue(ref(callRef, 'candidates'), snapshot => {
-        const candidates = snapshot.val();
-        if (!candidates) return;
-        Object.values(candidates).forEach(async cand => {
-          try { await pc.addIceCandidate(cand); } catch(e) {}
-        });
+      onChildAdded(ref(db, `calls/${callId}/candidates`), async snapshot => {
+        const cand = snapshot.val();
+        if (!cand) return;
+        try { await pc.addIceCandidate(cand); } catch(e) {}
       });
 
       if (isCaller) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await set(ref(callRef, 'offer'), pc.localDescription.toJSON());
+        await set(ref(db, `calls/${callId}/signals`), { sdp: pc.localDescription.toJSON() });
       }
-    }
-
-    // Generate random 3-letter ID
-    function generateCallId() {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      let id = '';
-      for (let i = 0; i < 3; i++) {
-        id += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-      return id;
     }
 
     createBtn.onclick = async () => {
-      await initLocalStream();
-      const callId = generateCallId();
-      callIdDisplay.innerText = 'Call ID: ' + callId;
+      await initMedia();
+      let callId = generateCallId();
+      callIdDisplay.innerText = "Call ID: " + callId;
       await createPeerConnection(callId, true);
-      alert("Share this 3-letter Call ID with your friend: " + callId);
     };
 
     joinBtn.onclick = async () => {
       const callId = callIdInput.value.trim().toUpperCase();
-      if (!callId || callId.length !== 3) return alert('Enter a valid 3-letter Call ID');
-      await initLocalStream();
+      if (!callId) return alert("Enter Call ID");
+      await initMedia();
       await createPeerConnection(callId, false);
     };
   </script>
