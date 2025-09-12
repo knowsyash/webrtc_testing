@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>WebRTC + Firebase Demo</title>
+    <style>
+        video {
+            width: 300px;
+            height: 225px;
+            background: black;
+            margin: 5px;
+        }
+
+        button {
+            margin: 5px;
+            padding: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>WebRTC Video Call Demo</h1>
+
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
+    <br>
+    <button id="createBtn">Create Call</button>
+    <button id="joinBtn">Join Call</button>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+        import { getDatabase, ref, set, onValue, push } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+        // ---------- Firebase config ----------
+        const firebaseConfig = {
+            apiKey: "AIzaSyDGJvWk6h7JFtuqdsM4RNGJwiQj_ZUz9R8",
+            authDomain: "rtc-project-sih.firebaseapp.com",
+            projectId: "rtc-project-sih",
+            storageBucket: "rtc-project-sih.firebasestorage.app",
+            messagingSenderId: "21024104436",
+            appId: "1:21024104436:web:23cf8fe41b750d118ba3a1",
+            measurementId: "G-1SLYX9DL0F",
+            databaseURL: "https://rtc-project-sih-default-rtdb.firebaseio.com/"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // ---------- HTML elements ----------
+        const localVideo = document.getElementById("localVideo");
+        const remoteVideo = document.getElementById("remoteVideo");
+        const createBtn = document.getElementById("createBtn");
+        const joinBtn = document.getElementById("joinBtn");
+
+        let pc; // RTCPeerConnection
+        let localStream;
+        let roomRef;
+
+        const servers = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+                // Add TURN server here if needed
+            ]
+        };
+
+        // ---------- Get local camera/mic ----------
+        async function initMedia() {
+            localStream = await navigator.mediaDevices.getUserMedia({
+                video: { width: 640, height: 360, frameRate: 15 },
+                audio: true
+            });
+            localVideo.srcObject = localStream;
+        }
+
+        await initMedia();
+
+        // ---------- Create Call ----------
+        createBtn.onclick = async () => {
+            pc = new RTCPeerConnection(servers);
+
+            // Add local tracks to connection
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            // Remote stream setup
+            const remoteStream = new MediaStream();
+            remoteVideo.srcObject = remoteStream;
+            pc.ontrack = event => event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+
+            // ICE candidates → Firebase
+            pc.onicecandidate = event => {
+                if (event.candidate) {
+                    push(ref(db, 'rooms/room1/candidates'), event.candidate.toJSON());
+                }
+            };
+
+            // Create SDP offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            // Save offer to Firebase
+            roomRef = ref(db, 'rooms/room1');
+            await set(roomRef, { offer: offer.toJSON() });
+
+            // Listen for answer
+            onValue(ref(db, 'rooms/room1/answer'), async snapshot => {
+                const data = snapshot.val();
+                if (!pc.currentRemoteDescription && data) {
+                    await pc.setRemoteDescription(data);
+                }
+            });
+
+            // Listen for ICE candidates from remote
+            onValue(ref(db, 'rooms/room1/candidates'), snapshot => {
+                const candidates = snapshot.val();
+                if (candidates) {
+                    Object.values(candidates).forEach(async cand => {
+                        try { await pc.addIceCandidate(cand); } catch (e) { console.log(e); }
+                    });
+                }
+            });
+
+            alert("Call created. Share room1 info with the other laptop to join!");
+        };
+
+        // ---------- Join Call ----------
+        joinBtn.onclick = async () => {
+            pc = new RTCPeerConnection(servers);
+
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            const remoteStream = new MediaStream();
+            remoteVideo.srcObject = remoteStream;
+            pc.ontrack = event => event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+
+            pc.onicecandidate = event => {
+                if (event.candidate) {
+                    push(ref(db, 'rooms/room1/candidates'), event.candidate.toJSON());
+                }
+            };
+
+            // Read offer from Firebase
+            roomRef = ref(db, 'rooms/room1');
+            onValue(roomRef, async snapshot => {
+                const data = snapshot.val();
+                if (data && data.offer && !pc.currentRemoteDescription) {
+                    await pc.setRemoteDescription(data.offer);
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    // Save answer to Firebase
+                    await set(ref(db, 'rooms/room1/answer'), answer.toJSON());
+                }
+            });
+
+            // Listen for ICE candidates
+            onValue(ref(db, 'rooms/room1/candidates'), snapshot => {
+                const candidates = snapshot.val();
+                if (candidates) {
+                    Object.values(candidates).forEach(async cand => {
+                        try { await pc.addIceCandidate(cand); } catch (e) { console.log(e); }
+                    });
+                }
+            });
+
+            alert("Joined call. Waiting for video...");
+        };
+    </script>
+</body>
+
+</html>
