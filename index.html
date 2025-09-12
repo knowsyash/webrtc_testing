@@ -173,8 +173,20 @@
           audio: true
         });
 
+        // IMMEDIATELY set the local video source
         localVideo.srcObject = localStream;
+
+        // Force the video to play
+        try {
+          await localVideo.play();
+          console.log('Local video started playing successfully');
+        } catch (playError) {
+          console.log('Local video play failed, but continuing:', playError);
+          // Don't throw error, just log it
+        }
+
         console.log('Media initialized successfully');
+        console.log('Local stream tracks:', localStream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
         showStatus("Camera and microphone access granted!");
 
       } catch (error) {
@@ -221,26 +233,59 @@
       statusDisplay.style.display = 'none';
     }
 
+    // Debug function to check video status
+    function checkVideoStatus() {
+      console.log('=== VIDEO STATUS CHECK ===');
+      console.log('Local video element:', localVideo);
+      console.log('Local video srcObject:', localVideo.srcObject);
+      console.log('Local video readyState:', localVideo.readyState);
+      console.log('Local video paused:', localVideo.paused);
+      console.log('Remote video element:', remoteVideo);
+      console.log('Remote video srcObject:', remoteVideo.srcObject);
+      console.log('Remote video readyState:', remoteVideo.readyState);
+      console.log('Remote video paused:', remoteVideo.paused);
+      if (localStream) {
+        console.log('Local stream tracks:', localStream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
+      }
+      console.log('========================');
+    }
+
     async function createPeerConnection(callId, isCaller) {
       try {
         pc = new RTCPeerConnection(servers);
         console.log('PeerConnection created for call:', callId, 'isCaller:', isCaller);
 
-        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+        // Add local tracks to peer connection
+        localStream.getTracks().forEach(track => {
+          console.log('Adding local track:', track.kind, track.enabled);
+          pc.addTrack(track, localStream);
+        });
+
+        console.log('Local tracks added to peer connection');
 
         pc.ontrack = event => {
           console.log('Received remote track:', event.track.kind);
           console.log('Remote streams:', event.streams);
 
+          // Handle the remote stream
           if (event.streams && event.streams[0]) {
+            // Use the first stream from the event
             remoteVideo.srcObject = event.streams[0];
-            console.log('Remote video stream set successfully');
+            console.log('Remote video stream set successfully from event.streams[0]');
+            showStatus('Remote video connected!');
           } else {
-            // Fallback: create stream from track
-            const remoteStream = new MediaStream([event.track]);
-            remoteVideo.srcObject = remoteStream;
-            console.log('Remote video stream created from track');
+            // Fallback: create stream from individual tracks
+            console.log('Creating remote stream from track');
+            if (!remoteVideo.srcObject) {
+              remoteVideo.srcObject = new MediaStream();
+            }
+            remoteVideo.srcObject.addTrack(event.track);
+            console.log('Remote track added to stream');
+            showStatus('Remote video track added!');
           }
+
+          // Ensure remote video plays
+          remoteVideo.play().catch(e => console.log('Remote video play failed:', e));
         };
 
         pc.onconnectionstatechange = () => {
@@ -386,6 +431,15 @@
         showStatus("Click 'Allow' when prompted for camera/microphone access...");
         await initMedia();
 
+        // CRITICAL: Ensure local video is visible IMMEDIATELY for creator
+        console.log('Creator: Setting local video immediately after initMedia');
+        localVideo.srcObject = localStream;
+        await localVideo.play();
+        console.log('Creator: Local video should be visible now');
+
+        // Debug check
+        setTimeout(() => checkVideoStatus(), 1000);
+
         currentCallId = generateCallId();
         generatedCallId.value = currentCallId;
         callIdSection.style.display = 'block';
@@ -417,6 +471,15 @@
 
         showStatus("Click 'Allow' when prompted for camera/microphone access...");
         await initMedia();
+
+        // CRITICAL: Ensure local video is visible IMMEDIATELY for joiner
+        console.log('Joiner: Setting local video immediately after initMedia');
+        localVideo.srcObject = localStream;
+        await localVideo.play();
+        console.log('Joiner: Local video should be visible now');
+
+        // Debug check
+        setTimeout(() => checkVideoStatus(), 1000);
 
         showStatus("Joining call...");
         currentCallId = callId;
