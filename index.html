@@ -3,13 +3,15 @@
 
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>WebRTC Demo</title>
   <style>
     body {
       font-family: Arial, sans-serif;
       max-width: 1200px;
       margin: 0 auto;
-      padding: 20px;
+      padding: 10px;
+      -webkit-text-size-adjust: 100%;
     }
 
     .video-container {
@@ -21,7 +23,7 @@
 
     .video-wrapper {
       flex: 1;
-      min-width: 300px;
+      min-width: 280px;
     }
 
     .video-wrapper h3 {
@@ -31,21 +33,82 @@
       padding: 10px;
       border-radius: 5px 5px 0 0;
       margin-bottom: 0;
+      font-size: 16px;
     }
 
     video {
       width: 100%;
-      height: 300px;
+      height: 250px;
       background: black;
       border: 2px solid #ccc;
       border-radius: 0 0 5px 5px;
       object-fit: cover;
+      -webkit-playsinline: true;
     }
 
     input,
     button {
       margin: 5px;
-      padding: 5px;
+      padding: 10px;
+      font-size: 16px;
+      /* Prevent zoom on iOS */
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+
+    button {
+      cursor: pointer;
+      -webkit-appearance: none;
+      appearance: none;
+      background: linear-gradient(to bottom, #f9f9f9, #e9e9e9);
+    }
+
+    /* Mobile-specific styles */
+    @media (max-width: 768px) {
+      body {
+        padding: 5px;
+      }
+
+      .video-container {
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .video-wrapper {
+        min-width: 100%;
+      }
+
+      video {
+        height: 200px;
+        /* Android-specific optimizations */
+        transform: translateZ(0);
+        /* Force hardware acceleration */
+        -webkit-transform: translateZ(0);
+      }
+
+      input,
+      button {
+        width: 100%;
+        box-sizing: border-box;
+        margin: 5px 0;
+        min-height: 44px;
+        /* Better touch targets for Android */
+      }
+
+      h2 {
+        font-size: 20px;
+        text-align: center;
+      }
+    }
+
+    /* Android-specific optimizations */
+    @media screen and (-webkit-min-device-pixel-ratio: 1) {
+      video {
+        -webkit-transform: translateZ(0);
+        transform: translateZ(0);
+        will-change: transform;
+        /* Optimize for animations */
+      }
     }
   </style>
 </head>
@@ -53,14 +116,28 @@
 <body>
   <h2>WebRTC Video Call Demo</h2>
 
+  <div id="mobileWarning"
+    style="display: none; margin: 10px 0; padding: 15px; background: #e3f2fd; border: 1px solid #2196f3; border-radius: 5px;">
+    <h4 style="margin-top: 0; color: #1976d2;">📱 Mobile Device Detected</h4>
+    <p style="color: #1976d2; margin-bottom: 0;">For best results on Android/Mobile:</p>
+    <ul style="color: #1976d2; margin-bottom: 0;">
+      <li><strong>MUST use HTTPS:</strong> Deploy to GitHub Pages (https://yourname.github.io/...)</li>
+      <li><strong>Allow permissions:</strong> Camera AND microphone when prompted</li>
+      <li><strong>Use Chrome browser</strong> for best compatibility</li>
+      <li><strong>Close other camera apps</strong> before using this</li>
+      <li>If video is black, refresh the page and try again</li>
+      <li>Keep your device charged (camera uses battery)</li>
+    </ul>
+  </div>
+
   <div class="video-container">
     <div class="video-wrapper">
       <h3>Your Camera (Local)</h3>
-      <video id="localVideo" autoplay muted playsinline></video>
+      <video id="localVideo" autoplay muted playsinline webkit-playsinline controls="false"></video>
     </div>
     <div class="video-wrapper">
       <h3>Remote Camera (Other Person)</h3>
-      <video id="remoteVideo" autoplay playsinline></video>
+      <video id="remoteVideo" autoplay playsinline webkit-playsinline controls="false"></video>
     </div>
   </div>
   <div style="margin: 20px 0;">
@@ -119,6 +196,35 @@
   </div>
 
   <script type="module">
+    // Mobile device detection and warning
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const isAndroid = /Android/i.test(navigator.userAgent);
+
+    if (isMobile) {
+      document.getElementById('mobileWarning').style.display = 'block';
+      console.log('Mobile device detected:', { isMobile, isAndroid });
+    }
+
+    // Android-specific checks
+    if (isAndroid) {
+      console.log('Android device detected - applying Android optimizations');
+
+      // Check for HTTPS on Android
+      if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+        const httpsWarning = document.createElement('div');
+        httpsWarning.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; background: #f44336; color: white; padding: 10px; text-align: center; z-index: 1000;';
+        httpsWarning.innerHTML = '⚠️ HTTPS Required on Android! Please use GitHub Pages (https://yourname.github.io/...)';
+        document.body.insertBefore(httpsWarning, document.body.firstChild);
+      }
+
+      // Android performance optimizations
+      document.addEventListener('DOMContentLoaded', () => {
+        // Disable text selection for better mobile experience
+        document.body.style.webkitUserSelect = 'none';
+        document.body.style.webkitTouchCallout = 'none';
+      });
+    }
+
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
     import { getDatabase, ref, set, get, onChildAdded, child } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 
@@ -161,6 +267,11 @@
 
     async function initMedia() {
       try {
+        // Check HTTPS requirement for mobile
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+          throw new Error('HTTPS is required for camera/microphone access on mobile devices. Please use GitHub Pages or HTTPS.');
+        }
+
         // Check if getUserMedia is supported
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error('Browser does not support camera/microphone access');
@@ -168,25 +279,128 @@
 
         showStatus("Please allow camera and microphone access when prompted...");
 
-        localStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true
-        });
+        // Detect device type
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        const isAndroid = /Android/i.test(navigator.userAgent);
 
-        // IMMEDIATELY set the local video source
-        localVideo.srcObject = localStream;
+        console.log('Device detection:', { isMobile, isAndroid });
 
-        // Force the video to play
-        try {
-          await localVideo.play();
-          console.log('Local video started playing successfully');
-        } catch (playError) {
-          console.log('Local video play failed, but continuing:', playError);
-          // Don't throw error, just log it
+        // Android-optimized constraints
+        let constraints;
+        if (isAndroid) {
+          constraints = {
+            video: {
+              width: { min: 320, ideal: 640, max: 1280 },
+              height: { min: 240, ideal: 480, max: 720 },
+              frameRate: { ideal: 15, max: 30 }, // Lower framerate for Android
+              facingMode: 'user'
+            },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          };
+        } else if (isMobile) {
+          constraints = {
+            video: {
+              width: { ideal: 640, max: 1280 },
+              height: { ideal: 480, max: 720 },
+              facingMode: 'user'
+            },
+            audio: true
+          };
+        } else {
+          // Desktop constraints
+          constraints = {
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            },
+            audio: true
+          };
         }
 
+        // Multiple fallback constraints for Android compatibility
+        const fallbackConstraints = [
+          { video: { facingMode: 'user' }, audio: true },
+          { video: true, audio: true },
+          { video: { width: 640, height: 480 }, audio: true },
+          { video: { width: 320, height: 240 }, audio: true }
+        ];
+
+        let streamAcquired = false;
+
+        // Try main constraints first
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia(constraints);
+          streamAcquired = true;
+          console.log('Primary constraints successful');
+        } catch (constraintError) {
+          console.log('Primary constraints failed:', constraintError);
+
+          // Try fallback constraints one by one
+          for (let i = 0; i < fallbackConstraints.length && !streamAcquired; i++) {
+            try {
+              console.log(`Trying fallback ${i + 1}:`, fallbackConstraints[i]);
+              localStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints[i]);
+              streamAcquired = true;
+              console.log(`Fallback ${i + 1} successful`);
+              break;
+            } catch (fallbackError) {
+              console.log(`Fallback ${i + 1} failed:`, fallbackError);
+            }
+          }
+        }
+
+        if (!streamAcquired) {
+          throw new Error('Unable to access camera with any constraints');
+        }
+
+        // Set up local video with Android-specific handling
+        localVideo.srcObject = localStream;
+
+        // Android-specific video attributes
+        localVideo.setAttribute('muted', 'true');
+        localVideo.setAttribute('playsinline', 'true');
+        localVideo.setAttribute('webkit-playsinline', 'true');
+        localVideo.setAttribute('autoplay', 'true');
+
+        if (isAndroid) {
+          // Additional Android optimizations
+          localVideo.setAttribute('preload', 'metadata');
+          localVideo.volume = 0; // Ensure muted for autoplay
+        }
+
+        // Force video play with multiple attempts
+        let playAttempts = 0;
+        const maxPlayAttempts = 3;
+
+        const attemptPlay = async () => {
+          try {
+            await localVideo.play();
+            console.log(`Local video play successful on attempt ${playAttempts + 1}`);
+            return true;
+          } catch (playError) {
+            playAttempts++;
+            console.log(`Play attempt ${playAttempts} failed:`, playError);
+
+            if (playAttempts < maxPlayAttempts) {
+              // Wait and try again
+              await new Promise(resolve => setTimeout(resolve, 500));
+              return attemptPlay();
+            } else {
+              console.log('All play attempts failed, but continuing...');
+              return false;
+            }
+          }
+        };
+
+        await attemptPlay();
+
         console.log('Media initialized successfully');
-        console.log('Local stream tracks:', localStream.getTracks().map(t => `${t.kind}: ${t.enabled}`));
+        console.log('Local stream tracks:', localStream.getTracks().map(t => `${t.kind}: ${t.enabled} (${t.readyState})`));
+        console.log('Video constraints used:', localStream.getVideoTracks()[0]?.getSettings());
         showStatus("Camera and microphone access granted!");
 
       } catch (error) {
@@ -194,14 +408,16 @@
 
         let errorMessage = "Error accessing camera/microphone. ";
 
-        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-          errorMessage += "Please click 'Allow' when the browser asks for camera/microphone permissions. Then refresh the page and try again.";
+        if (error.message.includes('HTTPS')) {
+          errorMessage = "❌ HTTPS Required: Please use GitHub Pages (https://yourname.github.io/...) to access camera on mobile.";
+        } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+          errorMessage += "Please click 'Allow' when prompted for camera/microphone permissions. On Android, make sure to allow both camera and microphone.";
         } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-          errorMessage += "No camera or microphone found. Please check your devices.";
+          errorMessage += "No camera or microphone found. Please check your Android device settings.";
         } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-          errorMessage += "Camera/microphone is already in use by another application.";
+          errorMessage += "Camera/microphone is being used by another app. Please close other camera apps and try again.";
         } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
-          errorMessage += "Camera/microphone settings not supported.";
+          errorMessage += "Camera settings not supported. Trying basic camera access...";
         } else {
           errorMessage += "Please ensure permissions are granted and try again.";
         }
@@ -267,7 +483,9 @@
           console.log('Received remote track:', event.track.kind);
           console.log('Remote streams:', event.streams);
 
-          // Handle the remote stream
+          const isAndroid = /Android/i.test(navigator.userAgent);
+
+          // Handle the remote stream with Android optimizations
           if (event.streams && event.streams[0]) {
             // Use the first stream from the event
             remoteVideo.srcObject = event.streams[0];
@@ -284,8 +502,32 @@
             showStatus('Remote video track added!');
           }
 
-          // Ensure remote video plays
-          remoteVideo.play().catch(e => console.log('Remote video play failed:', e));
+          // Android-specific video setup for remote video
+          if (isAndroid) {
+            remoteVideo.setAttribute('playsinline', 'true');
+            remoteVideo.setAttribute('webkit-playsinline', 'true');
+            remoteVideo.setAttribute('autoplay', 'true');
+            remoteVideo.setAttribute('preload', 'metadata');
+          }
+
+          // Ensure remote video plays with multiple attempts for Android
+          const attemptRemotePlay = async (attempts = 3) => {
+            for (let i = 0; i < attempts; i++) {
+              try {
+                await remoteVideo.play();
+                console.log(`Remote video play successful on attempt ${i + 1}`);
+                return;
+              } catch (playError) {
+                console.log(`Remote play attempt ${i + 1} failed:`, playError);
+                if (i < attempts - 1) {
+                  await new Promise(resolve => setTimeout(resolve, 300));
+                }
+              }
+            }
+            console.log('All remote play attempts failed, but continuing...');
+          };
+
+          attemptRemotePlay();
         };
 
         pc.onconnectionstatechange = () => {
