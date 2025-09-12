@@ -189,10 +189,22 @@
 
         pc.onconnectionstatechange = () => {
           console.log('Connection state:', pc.connectionState);
+          if (pc.connectionState === 'connected') {
+            showStatus('Video call connected successfully!');
+          } else if (pc.connectionState === 'failed') {
+            showStatus('Connection failed. Please try again.', true);
+          } else if (pc.connectionState === 'connecting') {
+            showStatus('Connecting to other person...');
+          }
         };
 
         pc.oniceconnectionstatechange = () => {
           console.log('ICE connection state:', pc.iceConnectionState);
+          if (pc.iceConnectionState === 'connected') {
+            showStatus('Successfully connected to other person!');
+          } else if (pc.iceConnectionState === 'failed') {
+            showStatus('Connection failed. Please check your internet and try again.', true);
+          }
         };
 
         const callRef = ref(db, "calls/" + callId);
@@ -209,16 +221,24 @@
           if (!data || !data.sdp) return;
 
           try {
-            if (!pc.currentRemoteDescription) {
+            console.log('Received signal:', snapshot.key, data.sdp.type);
+            
+            if (data.sdp.type === "offer" && !isCaller) {
+              // Joiner receives offer
+              console.log('Joiner: Setting remote description (offer)');
               await pc.setRemoteDescription(data.sdp);
-              if (data.sdp.type === "offer") {
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                await set(ref(db, `calls/${callId}/signals/answer`), { sdp: pc.localDescription.toJSON() });
-              }
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              await set(ref(db, `calls/${callId}/signals/answer`), { sdp: pc.localDescription.toJSON() });
+              console.log('Joiner: Answer sent');
+            } else if (data.sdp.type === "answer" && isCaller) {
+              // Creator receives answer
+              console.log('Creator: Setting remote description (answer)');
+              await pc.setRemoteDescription(data.sdp);
+              console.log('Creator: Answer processed');
             }
           } catch (error) {
-            console.error('Error handling remote description:', error);
+            console.error('Error handling signal:', error);
           }
         });
 
@@ -226,18 +246,43 @@
           const cand = snapshot.val();
           if (!cand) return;
           try {
-            await pc.addIceCandidate(cand);
-            console.log('Added ICE candidate:', cand);
+            // Wait for remote description before adding candidates
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(cand);
+              console.log('Added ICE candidate:', cand.candidate);
+            } else {
+              console.log('Waiting for remote description before adding candidate');
+              // Store candidate to add later
+              setTimeout(async () => {
+                if (pc.remoteDescription) {
+                  await pc.addIceCandidate(cand);
+                  console.log('Added delayed ICE candidate:', cand.candidate);
+                }
+              }, 1000);
+            }
           } catch (e) {
             console.warn('Failed to add ICE candidate:', e);
           }
         });
 
         if (isCaller) {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          await set(ref(db, `calls/${callId}/signals/offer`), { sdp: pc.localDescription.toJSON() });
-          console.log('Offer created and sent');
+          // Small delay to ensure all listeners are set up
+          setTimeout(async () => {
+            try {
+              console.log('Creator: Creating and sending offer...');
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              await set(ref(db, `calls/${callId}/signals/offer`), { sdp: pc.localDescription.toJSON() });
+              console.log('Creator: Offer created and sent to Firebase');
+              showStatus('Waiting for other person to join...');
+            } catch (error) {
+              console.error('Error creating offer:', error);
+              showStatus('Error creating call. Please try again.', true);
+            }
+          }, 500);
+        } else {
+          console.log('Joiner: Waiting for offer...');
+          showStatus('Connecting to call...');
         }
       } catch (error) {
         console.error('Error creating peer connection:', error);
