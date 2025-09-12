@@ -3,32 +3,38 @@
 <head>
   <title>WebRTC Video Call</title>
   <style>
-    video { width: 45%; margin: 5px; background: black; }
-    button { margin: 5px; padding: 10px; }
+    video {
+      width: 45%;
+      margin: 5px;
+      background: black;
+    }
+    input, button {
+      margin: 5px;
+      padding: 10px;
+    }
   </style>
 </head>
 <body>
-  <h2>WebRTC Video Call Demo</h2>
-  <video id="localVideo" autoplay playsinline muted></video>
+  <h2>WebRTC Video Call</h2>
+  <video id="localVideo" autoplay muted playsinline></video>
   <video id="remoteVideo" autoplay playsinline></video>
   <br>
   <button id="createCall">Create Call</button>
   <button id="joinCall">Join Call</button>
-  <input type="text" id="callIdInput" placeholder="Enter Call ID to join">
+  <input type="text" id="callIdInput" maxlength="3" placeholder="Enter 3-letter Call ID">
   <p id="callIdDisplay"></p>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-    import { getDatabase, ref, push, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+    import { getDatabase, ref, set, onValue, push } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 
-    // ---------- Firebase Config ----------
     const firebaseConfig = {
       databaseURL: "https://rtc-project-sih-default-rtdb.firebaseio.com/"
     };
+
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
 
-    // ---------- HTML Elements ----------
     const localVideo = document.getElementById('localVideo');
     const remoteVideo = document.getElementById('remoteVideo');
     const createBtn = document.getElementById('createCall');
@@ -36,45 +42,37 @@
     const callIdInput = document.getElementById('callIdInput');
     const callIdDisplay = document.getElementById('callIdDisplay');
 
-    // ---------- Global ----------
     let localStream;
     let pc;
 
-    // ---------- STUN + TURN Servers ----------
     const servers = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
       ]
     };
 
-    // ---------- Get Local Media ----------
     async function initLocalStream() {
       localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       localVideo.srcObject = localStream;
     }
 
-    // ---------- Create Peer Connection ----------
     async function createPeerConnection(callId, isCaller) {
       pc = new RTCPeerConnection(servers);
 
-      // Add local tracks
       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-      // Remote stream
       const remoteStream = new MediaStream();
       remoteVideo.srcObject = remoteStream;
       pc.ontrack = event => event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
 
       const callRef = ref(db, 'calls/' + callId);
 
-      // ICE candidates
       pc.onicecandidate = event => {
         if (event.candidate) push(ref(callRef, 'candidates'), event.candidate.toJSON());
       };
 
-      // Listen for remote SDP
       onValue(callRef, async snapshot => {
         const data = snapshot.val();
         if (!data) return;
@@ -91,16 +89,14 @@
         }
       });
 
-      // Listen for ICE candidates
       onValue(ref(callRef, 'candidates'), snapshot => {
         const candidates = snapshot.val();
         if (!candidates) return;
         Object.values(candidates).forEach(async cand => {
-          try { await pc.addIceCandidate(cand); } catch(e) { console.log(e); }
+          try { await pc.addIceCandidate(cand); } catch(e) {}
         });
       });
 
-      // Caller: create offer
       if (isCaller) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -108,17 +104,27 @@
       }
     }
 
-    // ---------- Button Handlers ----------
+    // Generate random 3-letter ID
+    function generateCallId() {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      let id = '';
+      for (let i = 0; i < 3; i++) {
+        id += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return id;
+    }
+
     createBtn.onclick = async () => {
       await initLocalStream();
-      const callId = push(ref(db, 'calls')).key; // unique call ID
+      const callId = generateCallId();
       callIdDisplay.innerText = 'Call ID: ' + callId;
       await createPeerConnection(callId, true);
+      alert("Share this 3-letter Call ID with your friend: " + callId);
     };
 
     joinBtn.onclick = async () => {
-      const callId = callIdInput.value.trim();
-      if (!callId) return alert('Enter Call ID');
+      const callId = callIdInput.value.trim().toUpperCase();
+      if (!callId || callId.length !== 3) return alert('Enter a valid 3-letter Call ID');
       await initLocalStream();
       await createPeerConnection(callId, false);
     };
