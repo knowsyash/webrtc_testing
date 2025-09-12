@@ -186,6 +186,9 @@
       <li>If you accidentally blocked access, refresh the page and try again</li>
     </ol>
     <div style="display: flex; gap: 10px;">
+      <button id="requestPermissionsBtn" onclick="requestPermissionsManually()"
+        style="background: #ff6b6b; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">📹
+        Allow Camera & Microphone</button>
       <button onclick="document.getElementById('permissionHelp').style.display='none'"
         style="background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Got
         it!</button>
@@ -257,6 +260,7 @@
     let pc;
     let localStream;
     let currentCallId;
+    let permissionRequestInProgress = false;
 
     const servers = {
       iceServers: [
@@ -265,8 +269,94 @@
       ]
     };
 
+    // Manual permission request function for user interaction
+    async function requestPermissionsManually() {
+      if (permissionRequestInProgress) {
+        console.log('Permission request already in progress');
+        return;
+      }
+
+      try {
+        permissionRequestInProgress = true;
+        document.getElementById('requestPermissionsBtn').textContent = '⏳ Requesting...';
+        document.getElementById('requestPermissionsBtn').disabled = true;
+
+        // Simple request to avoid Android permission loops
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+        // Store the stream globally if successful
+        localStream = stream;
+
+        // Store successful permission
+        const isAndroid = /Android/i.test(navigator.userAgent);
+        if (isAndroid) {
+          localStorage.setItem('webrtc_permissions_granted', Date.now().toString());
+        }
+
+        console.log('Manual permission request successful');
+        document.getElementById('permissionHelp').style.display = 'none';
+        showStatus('✅ Camera and microphone access granted! You can now create or join calls.', false);
+
+        return true;
+      } catch (error) {
+        console.error('Manual permission request failed:', error);
+
+        let errorMsg = 'Permission request failed. ';
+        if (error.name === 'NotAllowedError') {
+          errorMsg += 'Please click "Allow" when prompted, or check your browser settings.';
+        }
+
+        alert(errorMsg);
+        document.getElementById('requestPermissionsBtn').textContent = '📹 Allow Camera & Microphone';
+        document.getElementById('requestPermissionsBtn').disabled = false;
+
+        return false;
+      } finally {
+        permissionRequestInProgress = false;
+      }
+    }
+
+    async function checkPermissions() {
+      // Check if Permissions API is available
+      if ('permissions' in navigator) {
+        try {
+          const cameraPermission = await navigator.permissions.query({ name: 'camera' });
+          const microphonePermission = await navigator.permissions.query({ name: 'microphone' });
+
+          console.log('Camera permission state:', cameraPermission.state);
+          console.log('Microphone permission state:', microphonePermission.state);
+
+          return {
+            camera: cameraPermission.state,
+            microphone: microphonePermission.state
+          };
+        } catch (error) {
+          console.log('Permissions API not fully supported:', error);
+          return null;
+        }
+      }
+      return null;
+    }
+
     async function initMedia() {
       try {
+        // Check if we already have a stream from manual permission request
+        if (localStream && localStream.getTracks().length > 0) {
+          console.log('Using existing stream from manual permission request');
+
+          // Set up local video
+          localVideo.srcObject = localStream;
+          localVideo.setAttribute('muted', 'true');
+          localVideo.setAttribute('playsinline', 'true');
+          localVideo.setAttribute('webkit-playsinline', 'true');
+          localVideo.setAttribute('autoplay', 'true');
+
+          await localVideo.play().catch(e => console.log('Local video play failed:', e));
+
+          showStatus("Using existing camera and microphone access!");
+          return;
+        }
+
         // Check HTTPS requirement for mobile
         if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
           throw new Error('HTTPS is required for camera/microphone access on mobile devices. Please use GitHub Pages or HTTPS.');
@@ -277,6 +367,18 @@
           throw new Error('Browser does not support camera/microphone access');
         }
 
+        // Check existing permissions first
+        const permissionStates = await checkPermissions();
+        if (permissionStates) {
+          if (permissionStates.camera === 'denied' || permissionStates.microphone === 'denied') {
+            throw new Error('Camera or microphone access is permanently denied. Please reset permissions in browser settings.');
+          }
+
+          if (permissionStates.camera === 'granted' && permissionStates.microphone === 'granted') {
+            console.log('Permissions already granted, proceeding...');
+          }
+        }
+
         showStatus("Please allow camera and microphone access when prompted...");
 
         // Detect device type
@@ -285,27 +387,17 @@
 
         console.log('Device detection:', { isMobile, isAndroid });
 
-        // Android-optimized constraints
+        // For Android, use very simple constraints first
         let constraints;
         if (isAndroid) {
+          // Simplified constraints for Android to avoid permission loops
           constraints = {
-            video: {
-              width: { min: 320, ideal: 640, max: 1280 },
-              height: { min: 240, ideal: 480, max: 720 },
-              frameRate: { ideal: 15, max: 30 }, // Lower framerate for Android
-              facingMode: 'user'
-            },
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }
+            video: true,
+            audio: true
           };
         } else if (isMobile) {
           constraints = {
             video: {
-              width: { ideal: 640, max: 1280 },
-              height: { ideal: 480, max: 720 },
               facingMode: 'user'
             },
             audio: true
@@ -321,40 +413,37 @@
           };
         }
 
-        // Multiple fallback constraints for Android compatibility
-        const fallbackConstraints = [
-          { video: { facingMode: 'user' }, audio: true },
-          { video: true, audio: true },
-          { video: { width: 640, height: 480 }, audio: true },
-          { video: { width: 320, height: 240 }, audio: true }
-        ];
+        // Store successful permission for future reference
+        const permissionKey = 'webrtc_permissions_granted';
 
-        let streamAcquired = false;
-
-        // Try main constraints first
+        // Single request approach to avoid repeated permission prompts on Android
         try {
+          console.log('Requesting media with constraints:', constraints);
           localStream = await navigator.mediaDevices.getUserMedia(constraints);
-          streamAcquired = true;
-          console.log('Primary constraints successful');
-        } catch (constraintError) {
-          console.log('Primary constraints failed:', constraintError);
 
-          // Try fallback constraints one by one
-          for (let i = 0; i < fallbackConstraints.length && !streamAcquired; i++) {
-            try {
-              console.log(`Trying fallback ${i + 1}:`, fallbackConstraints[i]);
-              localStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints[i]);
-              streamAcquired = true;
-              console.log(`Fallback ${i + 1} successful`);
-              break;
-            } catch (fallbackError) {
-              console.log(`Fallback ${i + 1} failed:`, fallbackError);
-            }
+          // Store successful permission
+          if (isAndroid) {
+            localStorage.setItem(permissionKey, Date.now().toString());
           }
-        }
 
-        if (!streamAcquired) {
-          throw new Error('Unable to access camera with any constraints');
+          console.log('Media access successful');
+        } catch (mediaError) {
+          console.log('Media request failed:', mediaError);
+
+          // Only try basic fallback for Android if the error is constraint-related
+          if (isAndroid && (mediaError.name === 'OverconstrainedError' || mediaError.name === 'ConstraintNotSatisfiedError')) {
+            console.log('Trying basic Android fallback...');
+            try {
+              localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+              localStorage.setItem(permissionKey, Date.now().toString());
+              console.log('Android fallback successful');
+            } catch (fallbackError) {
+              console.log('Android fallback failed:', fallbackError);
+              throw fallbackError;
+            }
+          } else {
+            throw mediaError;
+          }
         }
 
         // Set up local video with Android-specific handling
