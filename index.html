@@ -2,13 +2,16 @@
 <html>
 <head>
   <title>WebRTC Test</title>
+  <style>
+    video { width: 45%; margin: 5px; background: black; }
+    button, input { margin: 5px; padding: 10px; }
+  </style>
 </head>
 <body>
   <h2>WebRTC Test</h2>
-  <video id="localVideo" autoplay playsinline muted style="width: 45%;"></video>
-  <video id="remoteVideo" autoplay playsinline style="width: 45%;"></video>
-  <br><br>
-
+  <video id="localVideo" autoplay playsinline muted></video>
+  <video id="remoteVideo" autoplay playsinline></video>
+  <br>
   <button id="createCall">Create Call</button>
   <button id="joinCall">Join Call</button>
   <input type="text" id="callIdInput" placeholder="Enter Call ID to join">
@@ -16,12 +19,11 @@
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-    import { getDatabase, ref, push, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+    import { getDatabase, ref, push, set, onChildAdded, get } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 
     const firebaseConfig = {
       databaseURL: "https://rtc-project-sih-default-rtdb.firebaseio.com/"
     };
-
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
 
@@ -37,62 +39,62 @@
     const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
     async function initLocalStream() {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localVideo.srcObject = localStream;
+      if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+      }
     }
 
-    async function createPeerConnection(callId, isCaller) {
+    async function setupCall(callId, isCaller) {
       pc = new RTCPeerConnection(servers);
 
-      // Attach local tracks
+      // Add local tracks
       localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-      // Remote stream
+      // Remote video
       const remoteStream = new MediaStream();
       remoteVideo.srcObject = remoteStream;
-      pc.ontrack = event => event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+      pc.ontrack = e => e.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
 
       const callRef = ref(db, 'calls/' + callId);
 
       // ICE candidates
-      pc.onicecandidate = event => {
-        if (event.candidate) {
-          push(ref(callRef, 'candidates'), event.candidate.toJSON());
-        }
+      pc.onicecandidate = e => {
+        if (e.candidate) push(ref(callRef, 'candidates'), e.candidate.toJSON());
       };
 
-      // Listen for remote SDP & candidates
-      onValue(callRef, async snapshot => {
-        const data = snapshot.val();
-        if (!data) return;
-
-        // Answer from joiner
-        if (isCaller && data.answer && !pc.currentRemoteDescription) {
-          await pc.setRemoteDescription(data.answer);
+      // Listen for remote ICE candidates
+      onChildAdded(ref(callRef, 'candidates'), async snapshot => {
+        const candidate = snapshot.val();
+        if (candidate) {
+          try { await pc.addIceCandidate(candidate); } catch(e) {}
         }
-
-        // Offer from caller
-        if (!isCaller && data.offer && !pc.currentRemoteDescription) {
-          await pc.setRemoteDescription(data.offer);
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          await set(ref(callRef, 'answer'), pc.localDescription.toJSON());
-        }
-      });
-
-      // Listen for ICE candidates
-      onValue(ref(callRef, 'candidates'), snapshot => {
-        const candidates = snapshot.val();
-        if (!candidates) return;
-        Object.values(candidates).forEach(async cand => {
-          try { await pc.addIceCandidate(cand); } catch(e) {}
-        });
       });
 
       if (isCaller) {
+        // Create offer
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await set(ref(callRef, 'offer'), pc.localDescription.toJSON());
+
+        // Listen for answer
+        onChildAdded(ref(callRef, 'answer'), async snapshot => {
+          const answer = snapshot.val();
+          if (answer && !pc.currentRemoteDescription) {
+            await pc.setRemoteDescription(answer);
+          }
+        });
+      } else {
+        // Joiner: wait for offer
+        const offerSnap = await get(ref(callRef, 'offer'));
+        if (!offerSnap.exists()) return alert('Call ID not found');
+
+        const offer = offerSnap.val();
+        await pc.setRemoteDescription(offer);
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await set(ref(callRef, 'answer'), pc.localDescription.toJSON());
       }
     }
 
@@ -100,14 +102,14 @@
       await initLocalStream();
       const callId = push(ref(db, 'calls')).key;
       callIdDisplay.innerText = 'Call ID: ' + callId;
-      await createPeerConnection(callId, true);
+      await setupCall(callId, true);
     };
 
     joinBtn.onclick = async () => {
       const callId = callIdInput.value.trim();
       if (!callId) return alert('Enter Call ID');
       await initLocalStream();
-      await createPeerConnection(callId, false);
+      await setupCall(callId, false);
     };
   </script>
 </body>
