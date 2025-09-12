@@ -98,6 +98,26 @@
     <p id="statusText"></p>
   </div>
 
+  <div id="permissionHelp"
+    style="margin: 20px 0; padding: 15px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; display: none;">
+    <h4 style="margin-top: 0; color: #856404;">📹 Camera & Microphone Permissions Required</h4>
+    <p style="color: #856404; margin-bottom: 10px;">To use video calling, you need to allow camera and microphone
+      access:</p>
+    <ol style="color: #856404; margin-bottom: 10px;">
+      <li>When prompted, click <strong>"Allow"</strong> (not "Block" or "Deny")</li>
+      <li>If you see a camera icon in your browser's address bar, click it and select "Allow"</li>
+      <li>If you accidentally blocked access, refresh the page and try again</li>
+    </ol>
+    <div style="display: flex; gap: 10px;">
+      <button onclick="document.getElementById('permissionHelp').style.display='none'"
+        style="background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Got
+        it!</button>
+      <button onclick="window.location.reload()"
+        style="background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">Refresh
+        Page</button>
+    </div>
+  </div>
+
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
     import { getDatabase, ref, set, get, onChildAdded, child } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
@@ -141,12 +161,41 @@
 
     async function initMedia() {
       try {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        // Check if getUserMedia is supported
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Browser does not support camera/microphone access');
+        }
+
+        showStatus("Please allow camera and microphone access when prompted...");
+
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true
+        });
+
         localVideo.srcObject = localStream;
         console.log('Media initialized successfully');
+        showStatus("Camera and microphone access granted!");
+
       } catch (error) {
         console.error('Error accessing media devices:', error);
-        alert('Error accessing camera/microphone. Please ensure permissions are granted.');
+
+        let errorMessage = "Error accessing camera/microphone. ";
+
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+          errorMessage += "Please click 'Allow' when the browser asks for camera/microphone permissions. Then refresh the page and try again.";
+        } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+          errorMessage += "No camera or microphone found. Please check your devices.";
+        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+          errorMessage += "Camera/microphone is already in use by another application.";
+        } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
+          errorMessage += "Camera/microphone settings not supported.";
+        } else {
+          errorMessage += "Please ensure permissions are granted and try again.";
+        }
+
+        showStatus(errorMessage, true);
+        alert(errorMessage);
         throw error;
       }
     }
@@ -331,7 +380,10 @@
     // Button event handlers
     createBtn.onclick = async () => {
       try {
-        showStatus("Accessing camera and microphone...");
+        // Show permission help first
+        document.getElementById('permissionHelp').style.display = 'block';
+
+        showStatus("Click 'Allow' when prompted for camera/microphone access...");
         await initMedia();
 
         currentCallId = generateCallId();
@@ -343,9 +395,12 @@
 
         showStatus(`Call created! Share the Call ID: ${currentCallId}`);
         console.log('Call created with ID:', currentCallId);
+
+        // Hide permission help once successful
+        document.getElementById('permissionHelp').style.display = 'none';
       } catch (error) {
         console.error('Error creating call:', error);
-        showStatus("Error creating call. Please try again.", true);
+        showStatus("Error creating call. Please allow camera/microphone access and try again.", true);
       }
     };
 
@@ -357,7 +412,10 @@
           return;
         }
 
-        showStatus("Accessing camera and microphone...");
+        // Show permission help first
+        document.getElementById('permissionHelp').style.display = 'block';
+
+        showStatus("Click 'Allow' when prompted for camera/microphone access...");
         await initMedia();
 
         showStatus("Joining call...");
@@ -366,9 +424,12 @@
 
         showStatus(`Joined call: ${callId}`);
         console.log('Joined call with ID:', callId);
+
+        // Hide permission help once successful
+        document.getElementById('permissionHelp').style.display = 'none';
       } catch (error) {
         console.error('Error joining call:', error);
-        showStatus('Error joining call. Please check the Call ID and try again.', true);
+        showStatus('Error joining call. Please allow camera/microphone access and try again.', true);
       }
     };
 
