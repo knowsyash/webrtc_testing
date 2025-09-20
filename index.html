@@ -194,7 +194,7 @@
     <div
       style="background: white; padding: 30px; border-radius: 10px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.3); max-width: 400px; width: 90%;">
       <h2 style="color: #f44336; margin-top: 0;">📞 Call Ended</h2>
-      <p style="font-size: 18px; margin: 20px 0; color: #333;">The call has been ended by the other participant.</p>
+      <p id="callEndedMessage" style="font-size: 18px; margin: 20px 0; color: #333;">The call has ended.</p>
       <button onclick="closeCallEndedModal()"
         style="background: #4CAF50; color: white; padding: 12px 24px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer;">OK</button>
     </div>
@@ -584,8 +584,16 @@
     window.closeCallEndedModal = closeCallEndedModal;
 
     // Function to show call ended modal
-    function showCallEndedModal() {
+    function showCallEndedModal(isInitiator = false) {
       const modal = document.getElementById('callEndedModal');
+      const messageElement = document.getElementById('callEndedMessage');
+
+      if (isInitiator) {
+        messageElement.textContent = 'You have successfully ended the call.';
+      } else {
+        messageElement.textContent = 'The call has been ended by the other participant.';
+      }
+
       modal.style.display = 'flex';
     }
 
@@ -656,13 +664,10 @@
         generatedCallId.value = '';
         currentCallId = null;
 
-        // Show status
-        showStatus('Call ended successfully');
-
-        // Clear status after a few seconds
+        // Show "Call ended" modal for the person who ended the call as well
         setTimeout(() => {
-          hideStatus();
-        }, 3000);
+          showCallEndedModal(true); // true indicates this person initiated the end call
+        }, 500);
 
         console.log('Call ended and UI reset');
       } catch (error) {
