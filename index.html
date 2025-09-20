@@ -188,6 +188,18 @@
     <p id="statusText"></p>
   </div>
 
+  <!-- Call Ended Modal -->
+  <div id="callEndedModal"
+    style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10000; justify-content: center; align-items: center;">
+    <div
+      style="background: white; padding: 30px; border-radius: 10px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.3); max-width: 400px; width: 90%;">
+      <h2 style="color: #f44336; margin-top: 0;">📞 Call Ended</h2>
+      <p style="font-size: 18px; margin: 20px 0; color: #333;">The call has been ended by the other participant.</p>
+      <button onclick="closeCallEndedModal()"
+        style="background: #4CAF50; color: white; padding: 12px 24px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer;">OK</button>
+    </div>
+  </div>
+
   <div id="permissionHelp"
     style="margin: 20px 0; padding: 15px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; display: none;">
     <h4 style="margin-top: 0; color: #856404;">📹 Camera & Microphone Permissions Required</h4>
@@ -563,6 +575,20 @@
       statusDisplay.style.display = 'none';
     }
 
+    // Function to close the call ended modal
+    function closeCallEndedModal() {
+      document.getElementById('callEndedModal').style.display = 'none';
+    }
+
+    // Make closeCallEndedModal globally accessible
+    window.closeCallEndedModal = closeCallEndedModal;
+
+    // Function to show call ended modal
+    function showCallEndedModal() {
+      const modal = document.getElementById('callEndedModal');
+      modal.style.display = 'flex';
+    }
+
     // Debug function to check video status
     function checkVideoStatus() {
       console.log('=== VIDEO STATUS CHECK ===');
@@ -585,6 +611,16 @@
       console.log('Ending call...');
 
       try {
+        // Send end call signal to Firebase to notify the other participant
+        if (currentCallId) {
+          const endCallSignal = {
+            type: 'endCall',
+            timestamp: Date.now()
+          };
+          set(ref(db, `calls/${currentCallId}/signals/endCall`), endCallSignal)
+            .catch(error => console.error('Error sending end call signal:', error));
+        }
+
         // Stop all local stream tracks
         if (localStream) {
           localStream.getTracks().forEach(track => {
@@ -632,6 +668,52 @@
       } catch (error) {
         console.error('Error ending call:', error);
         showStatus('Error ending call', true);
+      }
+    }
+
+    // Function to end call locally without sending signal (used when receiving end call signal)
+    function endCallLocally() {
+      console.log('Ending call locally (received end signal)...');
+
+      try {
+        // Stop all local stream tracks
+        if (localStream) {
+          localStream.getTracks().forEach(track => {
+            track.stop();
+            console.log('Stopped local track:', track.kind);
+          });
+          localStream = null;
+        }
+
+        // Close peer connection
+        if (pc) {
+          pc.close();
+          console.log('Peer connection closed');
+          pc = null;
+        }
+
+        // Clear video elements
+        localVideo.srcObject = null;
+        remoteVideo.srcObject = null;
+
+        // Reset UI state
+        endCallSection.style.display = 'none';
+        callIdSection.style.display = 'none';
+
+        // Hide video container (keep audio call appearance)
+        videoContainer.style.display = 'none';
+        videoEnabled = false;
+        toggleVideoBtn.textContent = '📹 Enable Video';
+        toggleVideoBtn.style.background = '#2196F3';
+
+        // Clear call ID
+        callIdInput.value = '';
+        generatedCallId.value = '';
+        currentCallId = null;
+
+        console.log('Call ended locally and UI reset');
+      } catch (error) {
+        console.error('Error ending call locally:', error);
       }
     }
 
@@ -799,6 +881,17 @@
         // Set up signaling listeners
         onChildAdded(ref(db, `calls/${callId}/signals`), async snapshot => {
           const data = snapshot.val();
+
+          // Handle end call signal
+          if (snapshot.key === 'endCall' && data.type === 'endCall') {
+            console.log('Received end call signal from other participant');
+            showCallEndedModal();
+            // End the call locally without sending another signal to avoid loop
+            endCallLocally();
+            return;
+          }
+
+          // Handle WebRTC signaling
           if (!data || !data.sdp) return;
 
           try {
