@@ -1043,7 +1043,7 @@
     }
 
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-    import { getDatabase, ref, set, get, onChildAdded, child } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+    import { getDatabase, ref, set, get, onChildAdded, onValue, child } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 
     // ----- Firebase config -----
     const firebaseConfig = {
@@ -1423,6 +1423,27 @@
       activeRealtimeUnsubscribers = [];
     }
 
+    async function writeSignal(callId, signalKey, payload) {
+      const modernPath = `calls/${callId}/signals/${signalKey}`;
+
+      try {
+        await set(ref(db, modernPath), payload);
+        return;
+      } catch (error) {
+        const isPermissionDenied =
+          (error && error.code === 'PERMISSION_DENIED') ||
+          (error && typeof error.message === 'string' && error.message.includes('PERMISSION_DENIED'));
+
+        if (!isPermissionDenied) {
+          throw error;
+        }
+
+        const legacyPath = `calls/${callId}/${signalKey}`;
+        console.warn(`Write to ${modernPath} denied. Falling back to ${legacyPath}.`);
+        await set(ref(db, legacyPath), payload);
+      }
+    }
+
     async function retryMediaPlayback() {
       try {
         if (localVideo.srcObject) {
@@ -1488,7 +1509,7 @@
             type: 'endCall',
             timestamp: Date.now()
           };
-          set(ref(db, `calls/${currentCallId}/signals/endCall`), endCallSignal)
+          writeSignal(currentCallId, 'endCall', endCallSignal)
             .catch(error => console.error('Error sending end call signal:', error));
         }
 
@@ -1759,8 +1780,6 @@
           }
         };
 
-        const callRef = ref(db, "calls/" + callId);
-
         pc.onicecandidate = event => {
           if (event.candidate) {
             console.log('ICE candidate gathered (non-trickle mode).');
@@ -1769,12 +1788,9 @@
           }
         };
 
-        // Set up signaling listeners
-        const stopSignalsListener = onChildAdded(ref(db, `calls/${callId}/signals`), async snapshot => {
-          const data = snapshot.val();
-
+        const handleSignal = async (signalKey, data) => {
           // Handle end call signal
-          if (snapshot.key === 'endCall' && data.type === 'endCall') {
+          if (signalKey === 'endCall' && data && data.type === 'endCall') {
             console.log('Received end call signal from other participant');
             showCallEndedModal();
             // End the call locally without sending another signal to avoid loop
@@ -1786,7 +1802,7 @@
           if (!data || !data.sdp) return;
 
           try {
-            console.log('Received signal:', snapshot.key, data.sdp.type);
+            console.log('Received signal:', signalKey, data.sdp.type);
 
             if (data.sdp.type === "offer" && !isCaller) {
               if (remoteOfferApplied || pc.remoteDescription) {
@@ -1802,7 +1818,7 @@
               const answer = await pc.createAnswer();
               await pc.setLocalDescription(answer);
               await waitForIceGatheringComplete(pc);
-              await set(ref(db, `calls/${callId}/signals/answer`), { sdp: pc.localDescription.toJSON() });
+              await writeSignal(callId, 'answer', { sdp: pc.localDescription.toJSON() });
               console.log('Joiner: Answer sent');
               showStatus('Answer sent, waiting for connection...');
             } else if (data.sdp.type === "answer" && isCaller) {
@@ -1822,8 +1838,29 @@
           } catch (error) {
             console.error('Error handling signal:', error);
           }
+        };
+
+        // Set up signaling listeners
+        const stopSignalsListener = onChildAdded(ref(db, `calls/${callId}/signals`), async snapshot => {
+          await handleSignal(snapshot.key, snapshot.val());
         });
         activeRealtimeUnsubscribers.push(stopSignalsListener);
+
+        // Listen to legacy top-level signaling paths for projects that still use old DB rules.
+        const stopLegacyOfferListener = onValue(ref(db, `calls/${callId}/offer`), async snapshot => {
+          await handleSignal('offer', snapshot.val());
+        });
+        activeRealtimeUnsubscribers.push(stopLegacyOfferListener);
+
+        const stopLegacyAnswerListener = onValue(ref(db, `calls/${callId}/answer`), async snapshot => {
+          await handleSignal('answer', snapshot.val());
+        });
+        activeRealtimeUnsubscribers.push(stopLegacyAnswerListener);
+
+        const stopLegacyEndCallListener = onValue(ref(db, `calls/${callId}/endCall`), async snapshot => {
+          await handleSignal('endCall', snapshot.val());
+        });
+        activeRealtimeUnsubscribers.push(stopLegacyEndCallListener);
 
         const stopCandidatesListener = onChildAdded(ref(db, `calls/${callId}/candidates`), async snapshot => {
           // Candidate writes are intentionally skipped in non-trickle mode.
@@ -1896,7 +1933,7 @@
 
             await pc.setLocalDescription(offer);
             await waitForIceGatheringComplete(pc);
-            await set(ref(db, `calls/${callId}/signals/offer`), { sdp: pc.localDescription.toJSON() });
+            await writeSignal(callId, 'offer', { sdp: pc.localDescription.toJSON() });
 
             console.log('Creator: Offer created and sent to Firebase');
             showStatus('Waiting for other person to join...');
