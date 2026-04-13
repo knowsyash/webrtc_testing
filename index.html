@@ -1044,6 +1044,7 @@
 
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
     import { getDatabase, ref, set, get, onChildAdded, onValue, child } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
     // ----- Firebase config -----
     const firebaseConfig = {
@@ -1058,6 +1059,7 @@
 
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
+    const auth = getAuth(app);
 
     const localVideo = document.getElementById("localVideo");
     const remoteVideo = document.getElementById("remoteVideo");
@@ -1081,6 +1083,14 @@
     let permissionRequestInProgress = false;
     let videoEnabled = true; // Start with video enabled so users immediately see the call screen
     let activeRealtimeUnsubscribers = [];
+    let currentFirebaseUser = null;
+    let resolveAuthReady;
+    let rejectAuthReady;
+    const authReadyPromise = new Promise((resolve, reject) => {
+      resolveAuthReady = resolve;
+      rejectAuthReady = reject;
+    });
+    let authReadySettled = false;
 
     const servers = {
       iceServers: [
@@ -1088,6 +1098,25 @@
         { urls: "turn:turn.anyfirewall.com:443?transport=tcp", username: "webrtc", credential: "webrtc" }
       ]
     };
+
+    onAuthStateChanged(auth, user => {
+      currentFirebaseUser = user;
+      if (user) {
+        console.log('Firebase anonymous auth ready:', user.uid);
+        if (!authReadySettled) {
+          authReadySettled = true;
+          resolveAuthReady(user);
+        }
+      }
+    });
+
+    signInAnonymously(auth).catch(error => {
+      console.error('Anonymous auth failed:', error);
+      if (!authReadySettled) {
+        authReadySettled = true;
+        rejectAuthReady(error);
+      }
+    });
 
     // Manual permission request function for user interaction
     async function requestPermissionsManually() {
@@ -1421,6 +1450,18 @@
         }
       });
       activeRealtimeUnsubscribers = [];
+    }
+
+    async function ensureFirebaseAuth() {
+      if (currentFirebaseUser) {
+        return currentFirebaseUser;
+      }
+
+      try {
+        return await authReadyPromise;
+      } catch (error) {
+        throw new Error('Firebase authentication failed. Realtime Database rules likely require auth.');
+      }
     }
 
     async function writeSignal(callId, signalKey, payload) {
@@ -1958,6 +1999,8 @@
       try {
         setButtonsBusy(true);
 
+        await ensureFirebaseAuth();
+
         // Show permission help first
         document.getElementById('permissionHelp').style.display = 'block';
 
@@ -1999,6 +2042,8 @@
     joinBtn.onclick = async () => {
       try {
         setButtonsBusy(true);
+
+        await ensureFirebaseAuth();
 
         const callId = callIdInput.value.trim().toUpperCase();
         if (!callId) {
