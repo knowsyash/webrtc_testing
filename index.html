@@ -1043,7 +1043,7 @@
     }
 
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-    import { getDatabase, ref, set, get, onChildAdded, onValue, child } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+    import { getDatabase, ref, set, get, onChildAdded, onValue, child, push } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
     // ----- Firebase config -----
@@ -1485,6 +1485,27 @@
       }
     }
 
+    async function writeIceCandidate(callId, payload) {
+      const modernPath = `calls/${callId}/signals/candidates`;
+
+      try {
+        await push(ref(db, modernPath), payload);
+        return;
+      } catch (error) {
+        const isPermissionDenied =
+          (error && error.code === 'PERMISSION_DENIED') ||
+          (error && typeof error.message === 'string' && error.message.includes('PERMISSION_DENIED'));
+
+        if (!isPermissionDenied) {
+          throw error;
+        }
+
+        const legacyPath = `calls/${callId}/candidates`;
+        console.warn(`Write to ${modernPath} denied. Falling back to ${legacyPath}.`);
+        await push(ref(db, legacyPath), payload);
+      }
+    }
+
     async function retryMediaPlayback() {
       try {
         if (localVideo.srcObject) {
@@ -1821,9 +1842,23 @@
           }
         };
 
-        pc.onicecandidate = event => {
+        pc.onicecandidate = async event => {
           if (event.candidate) {
-            console.log('ICE candidate gathered (non-trickle mode).');
+            const candidatePayload = {
+              sender: participantRole,
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+              usernameFragment: event.candidate.usernameFragment || null,
+              timestamp: Date.now()
+            };
+
+            try {
+              await writeIceCandidate(callId, candidatePayload);
+              console.log('ICE candidate sent');
+            } catch (error) {
+              console.warn('Failed to send ICE candidate:', error);
+            }
           } else {
             console.log('ICE gathering completed');
           }
