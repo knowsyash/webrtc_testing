@@ -1250,19 +1250,28 @@
         } catch (mediaError) {
           console.log('Media request failed:', mediaError);
 
-          // Only try basic fallback for Android if the error is constraint-related
+          // Retry with simpler constraints when device/constraint mismatch happens.
           if (isAndroid && (mediaError.name === 'OverconstrainedError' || mediaError.name === 'ConstraintNotSatisfiedError')) {
             console.log('Trying basic Android fallback...');
-            try {
-              localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-              localStorage.setItem(permissionKey, Date.now().toString());
-              console.log('Android fallback successful');
-            } catch (fallbackError) {
-              console.log('Android fallback failed:', fallbackError);
-              throw fallbackError;
-            }
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localStorage.setItem(permissionKey, Date.now().toString());
+            console.log('Android fallback successful');
           } else {
-            throw mediaError;
+            // Chrome on Android can fail audio even when camera is allowed.
+            // Fall back to video-only so call can still connect visually.
+            if (
+              mediaError.name === 'NotAllowedError' ||
+              mediaError.name === 'PermissionDeniedError' ||
+              mediaError.name === 'NotFoundError' ||
+              mediaError.name === 'NotReadableError' ||
+              mediaError.name === 'TrackStartError'
+            ) {
+              console.log('Trying video-only fallback after combined media failure...');
+              localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+              showStatus('Camera connected in video-only mode. Microphone is blocked/unavailable on this device.', true);
+            } else {
+              throw mediaError;
+            }
           }
         }
 
@@ -1594,6 +1603,8 @@
         pc = new RTCPeerConnection(servers);
         const participantRole = isCaller ? 'caller' : 'joiner';
         const pendingCandidates = [];
+        let remoteOfferApplied = false;
+        let remoteAnswerApplied = false;
         console.log('PeerConnection created for call:', callId, 'isCaller:', isCaller);
 
         const flushPendingCandidates = async () => {
@@ -1744,9 +1755,15 @@
             console.log('Received signal:', snapshot.key, data.sdp.type);
 
             if (data.sdp.type === "offer" && !isCaller) {
+              if (remoteOfferApplied || pc.remoteDescription) {
+                console.log('Joiner: Offer already processed, skipping duplicate');
+                return;
+              }
+
               // Joiner receives offer
               console.log('Joiner: Setting remote description (offer)');
               await pc.setRemoteDescription(data.sdp);
+              remoteOfferApplied = true;
               await flushPendingCandidates();
               const answer = await pc.createAnswer();
               await pc.setLocalDescription(answer);
@@ -1754,9 +1771,15 @@
               console.log('Joiner: Answer sent');
               showStatus('Answer sent, waiting for connection...');
             } else if (data.sdp.type === "answer" && isCaller) {
+              if (remoteAnswerApplied || pc.remoteDescription) {
+                console.log('Caller: Answer already processed, skipping duplicate');
+                return;
+              }
+
               // Creator receives answer
               console.log('Creator: Setting remote description (answer)');
               await pc.setRemoteDescription(data.sdp);
+              remoteAnswerApplied = true;
               await flushPendingCandidates();
               console.log('Creator: Answer processed');
               showStatus('Answer received, establishing connection...');
@@ -1766,28 +1789,6 @@
           }
         });
         activeRealtimeUnsubscribers.push(stopSignalsListener);
-
-        // For joiners, check if there's already an offer waiting
-        if (!isCaller) {
-          setTimeout(async () => {
-            try {
-              const offerSnapshot = await get(ref(db, `calls/${callId}/signals/offer`));
-              if (offerSnapshot.exists()) {
-                const offerData = offerSnapshot.val();
-                console.log('Joiner: Found existing offer');
-                await pc.setRemoteDescription(offerData.sdp);
-                await flushPendingCandidates();
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                await set(ref(db, `calls/${callId}/signals/answer`), { sdp: pc.localDescription.toJSON() });
-                console.log('Joiner: Answer sent to existing offer');
-                showStatus('Connected to existing call...');
-              }
-            } catch (error) {
-              console.error('Error checking for existing offer:', error);
-            }
-          }, 1000);
-        }
 
         const stopCandidatesListener = onChildAdded(ref(db, `calls/${callId}/candidates`), async snapshot => {
           const cand = snapshot.val();
