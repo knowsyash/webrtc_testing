@@ -1374,6 +1374,13 @@
       statusDisplay.style.display = 'none';
     }
 
+    function setButtonsBusy(isBusy) {
+      createBtn.disabled = isBusy;
+      joinBtn.disabled = isBusy;
+      createBtn.style.opacity = isBusy ? '0.6' : '1';
+      joinBtn.style.opacity = isBusy ? '0.6' : '1';
+    }
+
     function cleanupRealtimeListeners() {
       activeRealtimeUnsubscribers.forEach(unsubscribe => {
         try {
@@ -1820,20 +1827,33 @@
         activeRealtimeUnsubscribers.push(stopCandidatesListener);
 
         if (isCaller) {
-          // Small delay to ensure all listeners are set up
-          setTimeout(async () => {
-            try {
-              console.log('Creator: Creating and sending offer...');
-              const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
-              await set(ref(db, `calls/${callId}/signals/offer`), { sdp: pc.localDescription.toJSON() });
-              console.log('Creator: Offer created and sent to Firebase');
-              showStatus('Waiting for other person to join...');
-            } catch (error) {
-              console.error('Error creating offer:', error);
-              showStatus('Error creating call. Please try again.', true);
+          try {
+            console.log('Creator: Creating and sending offer...');
+
+            if (pc.connectionState === 'closed') {
+              throw new Error('Peer connection closed before creating offer.');
             }
-          }, 500);
+
+            const offer = await pc.createOffer({
+              offerToReceiveAudio: true,
+              offerToReceiveVideo: true
+            });
+
+            if (pc.signalingState !== 'stable') {
+              console.warn('Peer not in stable state before local description:', pc.signalingState);
+            }
+
+            await pc.setLocalDescription(offer);
+            await set(ref(db, `calls/${callId}/signals/offer`), { sdp: pc.localDescription.toJSON() });
+
+            console.log('Creator: Offer created and sent to Firebase');
+            showStatus('Waiting for other person to join...');
+          } catch (error) {
+            console.error('Error creating offer:', error);
+            const detail = error && error.message ? ` (${error.message})` : '';
+            showStatus(`Error creating call${detail}. Please try again.`, true);
+            throw error;
+          }
         } else {
           console.log('Joiner: Waiting for offer...');
           showStatus('Connecting to call...');
@@ -1847,6 +1867,8 @@
     // Button event handlers
     createBtn.onclick = async () => {
       try {
+        setButtonsBusy(true);
+
         // Show permission help first
         document.getElementById('permissionHelp').style.display = 'block';
 
@@ -1880,14 +1902,19 @@
       } catch (error) {
         console.error('Error creating call:', error);
         showStatus("Error creating call. Please allow camera/microphone access and try again.", true);
+      } finally {
+        setButtonsBusy(false);
       }
     };
 
     joinBtn.onclick = async () => {
       try {
+        setButtonsBusy(true);
+
         const callId = callIdInput.value.trim().toUpperCase();
         if (!callId) {
           showStatus("Please enter a Call ID", true);
+          setButtonsBusy(false);
           return;
         }
 
@@ -1921,6 +1948,8 @@
       } catch (error) {
         console.error('Error joining call:', error);
         showStatus('Error joining call. Please allow camera/microphone access and try again.', true);
+      } finally {
+        setButtonsBusy(false);
       }
     };
 
