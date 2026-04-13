@@ -1381,6 +1381,37 @@
       joinBtn.style.opacity = isBusy ? '0.6' : '1';
     }
 
+    async function waitForIceGatheringComplete(peerConnection, timeoutMs = 8000) {
+      if (peerConnection.iceGatheringState === 'complete') {
+        return;
+      }
+
+      await new Promise(resolve => {
+        let settled = false;
+
+        const done = () => {
+          if (settled) return;
+          settled = true;
+          peerConnection.removeEventListener('icegatheringstatechange', handleStateChange);
+          clearTimeout(timer);
+          resolve();
+        };
+
+        const handleStateChange = () => {
+          if (peerConnection.iceGatheringState === 'complete') {
+            done();
+          }
+        };
+
+        const timer = setTimeout(() => {
+          console.warn('Timed out waiting for ICE gathering completion, proceeding with partial candidates.');
+          done();
+        }, timeoutMs);
+
+        peerConnection.addEventListener('icegatheringstatechange', handleStateChange);
+      });
+    }
+
     function cleanupRealtimeListeners() {
       activeRealtimeUnsubscribers.forEach(unsubscribe => {
         try {
@@ -1610,6 +1641,7 @@
         pc = new RTCPeerConnection(servers);
         const participantRole = isCaller ? 'caller' : 'joiner';
         const pendingCandidates = [];
+        const seenCandidateFingerprints = new Set();
         let remoteOfferApplied = false;
         let remoteAnswerApplied = false;
         console.log('PeerConnection created for call:', callId, 'isCaller:', isCaller);
@@ -1731,12 +1763,7 @@
 
         pc.onicecandidate = event => {
           if (event.candidate) {
-            console.log('Sending ICE candidate:', event.candidate.candidate);
-            const candidateKey = Date.now() + '_' + Math.random().toString(36).substring(2, 9);
-            set(ref(db, `calls/${callId}/candidates/${candidateKey}`), {
-              ...event.candidate.toJSON(),
-              sender: participantRole
-            });
+            console.log('ICE candidate gathered (non-trickle mode).');
           } else {
             console.log('ICE gathering completed');
           }
@@ -1774,6 +1801,7 @@
               await flushPendingCandidates();
               const answer = await pc.createAnswer();
               await pc.setLocalDescription(answer);
+              await waitForIceGatheringComplete(pc);
               await set(ref(db, `calls/${callId}/signals/answer`), { sdp: pc.localDescription.toJSON() });
               console.log('Joiner: Answer sent');
               showStatus('Answer sent, waiting for connection...');
@@ -1798,13 +1826,10 @@
         activeRealtimeUnsubscribers.push(stopSignalsListener);
 
         const stopCandidatesListener = onChildAdded(ref(db, `calls/${callId}/candidates`), async snapshot => {
+          // Candidate writes are intentionally skipped in non-trickle mode.
+          // Keep listener only for backward compatibility with older calls.
           const cand = snapshot.val();
-          if (!cand) return;
-
-          if (cand.sender === participantRole) {
-            return;
-          }
-
+          if (!cand || cand.sender === participantRole || !cand.candidate) return;
           try {
             const candidate = {
               candidate: cand.candidate,
@@ -1812,19 +1837,45 @@
               sdpMLineIndex: cand.sdpMLineIndex,
               usernameFragment: cand.usernameFragment
             };
-
+            const fingerprint = `${candidate.candidate}|${candidate.sdpMid}|${candidate.sdpMLineIndex}`;
+            if (seenCandidateFingerprints.has(fingerprint)) return;
+            seenCandidateFingerprints.add(fingerprint);
             if (pc.remoteDescription) {
               await pc.addIceCandidate(candidate);
-              console.log('Added ICE candidate:', candidate.candidate);
+              console.log('Added compatibility ICE candidate from old path');
             } else {
               pendingCandidates.push(candidate);
-              console.log('Queued ICE candidate until remote description is set');
             }
-          } catch (e) {
-            console.warn('Failed to add ICE candidate:', e);
+          } catch (error) {
+            console.warn('Failed compatibility candidate add:', error);
           }
         });
         activeRealtimeUnsubscribers.push(stopCandidatesListener);
+
+        const stopFallbackCandidatesListener = onChildAdded(ref(db, `calls/${callId}/signals/candidates`), async snapshot => {
+          const cand = snapshot.val();
+          if (!cand || cand.sender === participantRole || !cand.candidate) return;
+          try {
+            const candidate = {
+              candidate: cand.candidate,
+              sdpMid: cand.sdpMid,
+              sdpMLineIndex: cand.sdpMLineIndex,
+              usernameFragment: cand.usernameFragment
+            };
+            const fingerprint = `${candidate.candidate}|${candidate.sdpMid}|${candidate.sdpMLineIndex}`;
+            if (seenCandidateFingerprints.has(fingerprint)) return;
+            seenCandidateFingerprints.add(fingerprint);
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(candidate);
+              console.log('Added compatibility ICE candidate from fallback path');
+            } else {
+              pendingCandidates.push(candidate);
+            }
+          } catch (error) {
+            console.warn('Failed compatibility fallback candidate add:', error);
+          }
+        });
+        activeRealtimeUnsubscribers.push(stopFallbackCandidatesListener);
 
         if (isCaller) {
           try {
@@ -1844,6 +1895,7 @@
             }
 
             await pc.setLocalDescription(offer);
+            await waitForIceGatheringComplete(pc);
             await set(ref(db, `calls/${callId}/signals/offer`), { sdp: pc.localDescription.toJSON() });
 
             console.log('Creator: Offer created and sent to Firebase');
